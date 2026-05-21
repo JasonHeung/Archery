@@ -49,7 +49,18 @@ logger = logging.getLogger("default")
 
 
 def index(request):
-    index_path_url = SysConfig().get("index_path_url", "sqlworkflow")
+    # 优先跳转到用户上次访问的页面（通过cookie记录）
+    last_visit = request.COOKIES.get("archery_last_visit", "")
+    if last_visit:
+        # 安全校验：只允许站内路径，防止开放重定向
+        from urllib.parse import urlparse, unquote
+        decoded = unquote(last_visit)
+        parsed = urlparse(decoded)
+        # 确保是相对路径（无scheme和netloc）
+        if not parsed.scheme and not parsed.netloc and decoded.startswith("/"):
+            return HttpResponseRedirect(decoded)
+    # 无上次访问记录时，使用系统配置的默认页（默认为在线查询）
+    index_path_url = SysConfig().get("index_path_url", "sqlquery")
     return HttpResponseRedirect(f"/{index_path_url.strip('/')}/")
 
 

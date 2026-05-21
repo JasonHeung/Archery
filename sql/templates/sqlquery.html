@@ -372,12 +372,14 @@
                     title: '语句',
                     field: 'sqllog',
                     formatter: function (value, row, index) {
-                        var _sql=row.sqllog
-                        if (_sql.length > 50) {
-                            var sql = _sql.substr(0, 50) + '...';
-                            return sql;
+                        var _sql = row.sqllog;
+                        // 转义HTML特殊字符用于tooltip
+                        var escaped = _sql.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+                        if (_sql.length > 80) {
+                            var preview = _sql.substr(0, 80) + '...';
+                            return '<span title="' + escaped + '" data-toggle="tooltip" data-placement="top" style="cursor:pointer;white-space:normal;word-break:break-all;">' + preview + '</span>';
                         } else {
-                            return value
+                            return '<span style="white-space:normal;word-break:break-all;">' + value + '</span>';
                         }
                     }
                 }, {
@@ -395,6 +397,8 @@
                     if (query_log_id) {
                         re_query(query_log_id)
                     }
+                    // 初始化tooltip以显示完整SQL
+                    $('[data-toggle="tooltip"]').tooltip({html: false, container: 'body'});
                 },
                 onLoadError: onLoadErrorCallback,
                 onSearch: function (e) {
@@ -499,8 +503,21 @@
             }
             let sql = row_data['sqllog'];
             let limit_num = $("#limit_num").val();
-            editor.setValue(sql);
+            // 追加到编辑器末尾而不是替换
+            var currentSql = editor.getValue();
+            if (currentSql && currentSql.trim()) {
+                // 确保上一条语句以分号结尾，再追加换行和新SQL
+                var trimmed = currentSql.trimEnd();
+                if (!trimmed.endsWith(';')) {
+                    trimmed = trimmed + ';';
+                }
+                editor.setValue(trimmed + '\n' + sql);
+            } else {
+                editor.setValue(sql);
+            }
             editor.clearSelection();
+            // 将光标移到末尾
+            editor.navigateFileEnd();
             $("#limit_num").val(limit_num);
             if (instance_name && db_name && sql) {
                 $('input[type=button]').addClass('disabled');
@@ -607,6 +624,13 @@
                 "    </div>\n" +
                 "    <table id=\"query_result" + tab_number + "\" data-toggle=\"table\" class=\"table table-condensed\"\n" +
                 "           style=\"table-layout:inherit;white-space:pre;overflow:hidden;text-overflow:ellipsis;\"></table>\n" +
+                "    <div class=\"panel panel-default\" style=\"margin-top:10px;\">\n" +
+                "        <div class=\"panel-heading\" style=\"padding:5px 10px;font-size:12px;\">执行的SQL语句 <small class=\"text-muted\">（可编辑后重新执行）</small></div>\n" +
+                "        <div class=\"panel-body\" style=\"padding:8px;\">\n" +
+                "            <textarea id=\"result_sql_editor" + tab_number + "\" class=\"form-control\" rows=\"3\" style=\"font-family:monospace;font-size:12px;resize:vertical;\"></textarea>\n" +
+                "            <button type=\"button\" class=\"btn btn-success btn-sm\" style=\"margin-top:6px;\" onclick=\"rerun_from_result(" + tab_number + ")\">重新执行</button>\n" +
+                "        </div>\n" +
+                "    </div>\n" +
                 "</div>\t";
             $("#tab-content").append(div);//div添加到div
 
@@ -998,6 +1022,9 @@
                     //执行时间和脱敏时间赋值
                     $("#" + ('time') + n).text(result['query_time'] + ' sec');
                     $("#" + ('masking_time') + n).text(result['mask_time'] + ' sec');
+                    //填充执行的SQL到结果页底部编辑框
+                    var displaySql = result['full_sql'] || '';
+                    $("#result_sql_editor" + n).val(displaySql);
                     //主从延迟赋值，仅在出现延迟时展示，null和0都不展示
                     if (result['seconds_behind_master']) {
                         $("#seconds_behind_master").text('Seconds_Behind_Master:  ' + result['seconds_behind_master']);
@@ -1148,10 +1175,159 @@
 
         function dosqlquery() {
             if (sqlquery_validate()) {
+                var select_sqlContent = editor.session.getTextRange(editor.getSelectionRange());
+                if (select_sqlContent && select_sqlContent.trim()) {
+                    // 尝试按分号分割多条语句
+                    var stmts = splitSqlStatements(select_sqlContent);
+                    if (stmts.length > 1) {
+                        // 多条语句：逐条执行，每条显示在独立tab
+                        $('input[type=button]').addClass('disabled');
+                        $('input[type=button]').prop('disabled', true);
+                        executeStatementsSequentially(stmts, 0);
+                        return;
+                    }
+                }
                 $('input[type=button]').addClass('disabled');
                 $('input[type=button]').prop('disabled', true);
                 sqlquery();
             }
+        }
+
+        // 将SQL文本按分号分割为多条有效语句
+        function splitSqlStatements(sql) {
+            var parts = sql.split(';');
+            var stmts = [];
+            for (var i = 0; i < parts.length; i++) {
+                var s = parts[i].trim();
+                if (s) {
+                    stmts.push(s + ';');
+                }
+            }
+            return stmts;
+        }
+
+        // 顺序执行多条SQL，每条结果显示在独立tab
+        function executeStatementsSequentially(stmts, index) {
+            if (index >= stmts.length) {
+                $('input[type=button]').removeClass('disabled');
+                $('input[type=button]').prop('disabled', false);
+                optgroup_control();
+                return;
+            }
+            var sql = stmts[index];
+            $.ajax({
+                type: "post",
+                url: "/query/",
+                dataType: "json",
+                data: {
+                    instance_name: $("#instance_name").val(),
+                    db_name: $("#db_name").val(),
+                    schema_name: $("#schema_name").val(),
+                    tb_name: $("#table_name").val(),
+                    sql_content: sql,
+                    limit_num: $("#limit_num").val()
+                },
+                success: function (data) {
+                    var target = $("#instance_name").val() + "/" + $("#db_name").val();
+                    // 强制新建tab（不复用当前执行结果页）
+                    tab_add('执行结果-' + (index + 1));
+                    var n = sessionStorage.getItem('tab_num');
+                    // 直接渲染到新tab
+                    display_data_to_tab(data, target, n, sql);
+                    executeStatementsSequentially(stmts, index + 1);
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+                    alert('第' + (index + 1) + '条语句执行失败: ' + errorThrown);
+                    executeStatementsSequentially(stmts, index + 1);
+                }
+            });
+        }
+
+        // 将查询结果渲染到指定tab编号（多语句执行专用）
+        function display_data_to_tab(data, target, n, executedSql) {
+            var result = data.data;
+            var query_str = target + '|' + (result ? result['full_sql'] : executedSql);
+            for (let i = 0; i < $("#execute_result_tab" + n + " p").length; i++) {
+                $("#execute_result_tab" + n + " p").remove();
+            }
+            $("#execute_result_tab" + n).append("<p style=\"display:none\">" + query_str + "</p>");
+            if (data.status === 0 && result['column_list']) {
+                var showExport = {{can_download}} === 1;
+                var columns = [];
+                $.each(result['column_list'], function (i, column) {
+                    columns.push({"field": i, "title": column, "sortable": true});
+                });
+                var query_result_id = 'query_result' + n;
+                $('#' + query_result_id).bootstrapTable('destroy').bootstrapTable({
+                    escape: true,
+                    data: result['rows'],
+                    columns: columns,
+                    showExport: showExport,
+                    exportDataType: "all",
+                    exportTypes: ['json', 'csv', 'txt', 'xlsx'],
+                    exportOptions: {fileName: 'export_result'},
+                    undefinedText: '(null)',
+                    showColumns: true,
+                    showToggle: true,
+                    clickToSelect: true,
+                    striped: true,
+                    pagination: true,
+                    pageSize: 30,
+                    pageList: [30, 50, 100, 500],
+                    search: true,
+                    locale: 'zh-CN'
+                });
+                $("#time" + n).text(result['query_time'] + ' sec');
+                $("#masking_time" + n).text(result['mask_time'] + ' sec');
+                $("#result_sql_editor" + n).val(result['full_sql'] || executedSql);
+            } else if (data.status !== 0) {
+                $('#query_result' + n).bootstrapTable('destroy').bootstrapTable({
+                    escape: false,
+                    columns: [{field: 'error', title: 'Error'}],
+                    data: [{error: data.msg}]
+                });
+                $("#result_sql_editor" + n).val(executedSql);
+            }
+        }
+
+        // 从执行结果页底部编辑框重新执行SQL
+        function rerun_from_result(tab_n) {
+            var sql = $("#result_sql_editor" + tab_n).val();
+            if (!sql || !sql.trim()) {
+                alert("SQL内容不能为空！");
+                return;
+            }
+            var instance_name = $("#instance_name").val();
+            var db_name = $("#db_name").val();
+            if (!instance_name) { alert("请选择实例！"); return; }
+            if (!db_name) { alert("请选择数据库！"); return; }
+            $('input[type=button]').addClass('disabled');
+            $('input[type=button]').prop('disabled', true);
+            $.ajax({
+                type: "post",
+                url: "/query/",
+                dataType: "json",
+                data: {
+                    instance_name: instance_name,
+                    db_name: db_name,
+                    schema_name: $("#schema_name").val(),
+                    tb_name: $("#table_name").val(),
+                    sql_content: sql,
+                    limit_num: $("#limit_num").val()
+                },
+                complete: function () {
+                    $('input[type=button]').removeClass('disabled');
+                    $('input[type=button]').prop('disabled', false);
+                    optgroup_control();
+                },
+                success: function (data) {
+                    var target = instance_name + "/" + db_name;
+                    display_data(data, target);
+                },
+                error: function (XMLHttpRequest, textStatus, errorThrown) {
+                    alert(errorThrown);
+                }
+            });
         }
     </script>
     <!-- common -->
@@ -1234,7 +1410,9 @@
             $("#db_name").empty();
             $('#db_name').selectpicker('render');
             $('#db_name').selectpicker('refresh');
-            sessionStorage.setItem('sql_query_instance_name', $("#instance_name").val());
+            var currentInstance = $("#instance_name").val();
+            sessionStorage.setItem('sql_query_instance_name', currentInstance);
+            localStorage.setItem('sql_query_instance_name', currentInstance);
             //获取db_name
             $.ajax({
                 type: "get",
@@ -1246,7 +1424,8 @@
                     resource_type: "database"
                 },
                 complete: function () {
-                    $("#db_name").selectpicker('val', db_name);
+                    var savedDb = localStorage.getItem('sql_query_db_name') || db_name;
+                    $("#db_name").selectpicker('val', savedDb);
                     if ($("#db_name").val()) {
                         $("#db_name").selectpicker().trigger("change");
                     }
@@ -1283,6 +1462,10 @@
 
         //数据库变更获取表/模式名称
         $("#db_name").change(function () {
+            var selectedDb = $("#db_name").val();
+            if (selectedDb) {
+                localStorage.setItem('sql_query_db_name', selectedDb);
+            }
             $("#table_name").empty();
             $('#table_name').selectpicker('render');
             $('#table_name').selectpicker('refresh');
@@ -1474,8 +1657,9 @@
                         tag_codes: ['can_read']
                     },
                     complete: function () {
-                        //填充实例名
-                        $("#instance_name").selectpicker('val', sessionStorage.getItem('sql_query_instance_name'));
+                        //填充实例名（优先localStorage持久化的值）
+                        var savedInstance = localStorage.getItem('sql_query_instance_name') || sessionStorage.getItem('sql_query_instance_name');
+                        $("#instance_name").selectpicker('val', savedInstance);
                         if ($("#instance_name").val()) {
                             $("#instance_name").selectpicker().trigger("change");
                         }

@@ -754,4 +754,18 @@
 </script>
 {% block js %}
 {% endblock %}
+<script>
+    // 记录用户最后访问的页面（排除登录、注销、首页等系统页面）
+    (function() {
+        var path = window.location.pathname;
+        var excludePaths = ['/', '/index/', '/login/', '/logout/', '/signup/'];
+        if (excludePaths.indexOf(path) === -1 && path.indexOf('/admin/') === -1) {
+            localStorage.setItem('archery_last_visit', path + window.location.search);
+            // 同时设置cookie供服务端读取（有效期30天）
+            var expires = new Date();
+            expires.setDate(expires.getDate() + 30);
+            document.cookie = 'archery_last_visit=' + encodeURIComponent(path + window.location.search) + '; expires=' + expires.toUTCString() + '; path=/';
+        }
+    })();
+</script>
 </html>
