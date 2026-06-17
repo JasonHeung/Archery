@@ -522,7 +522,7 @@
             if (instance_name && db_name && sql) {
                 $('input[type=button]').addClass('disabled');
                 $('input[type=button]').prop('disabled', true);
-                sqlquery()
+                sqlquery(null, sql)
             } else {
                 alert("信息不完整，无法一键查询！")
             }
@@ -1025,6 +1025,14 @@
                     //填充执行的SQL到结果页底部编辑框
                     var displaySql = result['full_sql'] || '';
                     $("#result_sql_editor" + n).val(displaySql);
+                    // 提取主表名并更新tab标题（仅非表结构类tab）
+                    if (!need_describe_display) {
+                        var mainTable = extractMainTable(displaySql);
+                        if (mainTable) {
+                            $("#execute_result_tab" + n + " a").text(mainTable);
+                            sessionStorage.setItem('active_li_title', mainTable);
+                        }
+                    }
                     //主从延迟赋值，仅在出现延迟时展示，null和0都不展示
                     if (result['seconds_behind_master']) {
                         $("#seconds_behind_master").text('Seconds_Behind_Master:  ' + result['seconds_behind_master']);
@@ -1061,14 +1069,18 @@
         }
 
         //将数据通过ajax提交给后端进行检查
-        function sqlquery(sql) {
+        function sqlquery(sql, forceSqlContent) {
             var optgroup = $('#instance_name :selected').parent().attr('label');
-            var select_sqlContent = editor.session.getTextRange(editor.getSelectionRange());
-            if (select_sqlContent) {
-                sqlContent = select_sqlContent
+            var sqlContent;
+            if (forceSqlContent) {
+                sqlContent = forceSqlContent;
             } else {
-                var sqlContent = editor.getValue();
-
+                var select_sqlContent = editor.session.getTextRange(editor.getSelectionRange());
+                if (select_sqlContent) {
+                    sqlContent = select_sqlContent
+                } else {
+                    sqlContent = editor.getValue();
+                }
             }
             if (optgroup === "Oracle") {
                 //查看执行计划
@@ -1171,6 +1183,31 @@
                     alert(errorThrown);
                 }
             });
+        }
+
+        // 从SQL语句中提取主表名
+        function extractMainTable(sql) {
+            if (!sql) return null;
+            var s = sql.trim().replace(/\s+/g, ' ');
+            var patterns = [
+                // SELECT ... FROM table
+                /\bFROM\s+`?(\w+)`?(?:\s*,|\s+(?:WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|GROUP|ORDER|LIMIT|$))/i,
+                // UPDATE table
+                /^UPDATE\s+`?(\w+)`?/i,
+                // INSERT INTO table
+                /^INSERT\s+(?:INTO\s+)?`?(\w+)`?/i,
+                // DELETE FROM table
+                /^DELETE\s+FROM\s+`?(\w+)`?/i,
+                // SHOW ... FROM/IN table / DESCRIBE table / EXPLAIN table
+                /^(?:SHOW|DESCRIBE|DESC|EXPLAIN)\s+.*?(?:FROM|IN)?\s+`?(\w+)`?/i,
+                // 兜底：FROM 后第一个词
+                /\bFROM\s+`?(\w+)`?/i,
+            ];
+            for (var i = 0; i < patterns.length; i++) {
+                var m = s.match(patterns[i]);
+                if (m && m[1]) return m[1];
+            }
+            return null;
         }
 
         function dosqlquery() {
