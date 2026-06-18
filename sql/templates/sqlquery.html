@@ -1211,22 +1211,27 @@
         }
 
         function dosqlquery() {
-            if (sqlquery_validate()) {
-                var select_sqlContent = editor.session.getTextRange(editor.getSelectionRange());
-                if (select_sqlContent && select_sqlContent.trim()) {
-                    // 尝试按分号分割多条语句
-                    var stmts = splitSqlStatements(select_sqlContent);
-                    if (stmts.length > 1) {
-                        // 多条语句：逐条执行，每条显示在独立tab
-                        $('input[type=button]').addClass('disabled');
-                        $('input[type=button]').prop('disabled', true);
-                        executeStatementsSequentially(stmts, 0);
-                        return;
-                    }
-                }
+            var select_sqlContent = editor.session.getTextRange(editor.getSelectionRange());
+            if (select_sqlContent && select_sqlContent.trim()) {
+                // 有选中内容：执行选中的SQL
+                if (!sqlquery_validate()) return;
+                var stmts = splitSqlStatements(select_sqlContent);
                 $('input[type=button]').addClass('disabled');
                 $('input[type=button]').prop('disabled', true);
-                sqlquery();
+                if (stmts.length > 1) {
+                    executeStatementsSequentially(stmts, 0);
+                } else {
+                    sqlquery();
+                }
+            } else {
+                // 无选中：执行光标所在行的SQL
+                var cursorRow = editor.getCursorPosition().row;
+                var lineContent = editor.session.getLine(cursorRow).trim();
+                if (!lineContent) return; // 当前行无内容，不执行
+                if (!sqlquery_validate()) return;
+                $('input[type=button]').addClass('disabled');
+                $('input[type=button]').prop('disabled', true);
+                sqlquery(null, lineContent);
             }
         }
 
