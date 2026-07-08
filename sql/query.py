@@ -170,6 +170,14 @@ def query(request):
                 close_old_connections()
         else:
             limit_num = 0
+        # 保存前删除最近20条中相同的SQL记录（去重）
+        recent_ids = list(
+            QueryLog.objects.filter(username=user.username)
+            .order_by("-id")[:20]
+            .values_list("id", flat=True)
+        )
+        QueryLog.objects.filter(id__in=recent_ids, sqllog=sql_content).delete()
+
         query_log = QueryLog(
             username=user.username,
             user_display=user.display,

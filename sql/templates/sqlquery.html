@@ -1365,6 +1365,8 @@
                 success: function (data) {
                     var target = instance_name + "/" + db_name;
                     display_data(data, target);
+                    // 刷新查询历史（新SQL已由后端写入，同时去重）
+                    $("#sql-log").bootstrapTable('refresh');
                 },
                 error: function (XMLHttpRequest, textStatus, errorThrown) {
                     alert(errorThrown);
